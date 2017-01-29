@@ -14,9 +14,11 @@ Reference
 # Copyright 2015 by California Institute of Technology
 # All rights reserved. Licensed under BSD-3.
 #
+import json
 import logging
 import pickle
 import pprint
+import shelve
 import sys
 import time
 
@@ -1171,6 +1173,141 @@ cpdef count_nodes_per_level(BDD bdd):
         n = bdd.manager.subtables[level].keys
         d[var] = n
     return d
+
+
+def dump_json(nodes, file_name):
+    """Write nodes reachable from `nodes` to JSON `file_name`.
+
+    The variable names and order are also dumped to the file.
+    This information uniquely defines the ROBDD.
+    """
+    # TODO: use `ijson`
+    tmp_fname = 'temporary_shelf.txt'
+    with shelve.open(tmp_fname) as dest:
+        dump_bdd(nodes, dest)
+        with open(file_name, 'w') as h:
+            for s, t in dest.items():
+                # must be done incrementally
+                # or, even simpler: we could read per line
+                json.dump({s: t}, h)
+                h.write('\n')
+
+
+# `dest` could be a file or another manager, in a more
+# general interface
+cpdef dump_bdd(nodes, dest):
+    """Write `nodes` to `dict`-like `dest`."""
+    # TODO: deactivate reordering during traversal
+    cdef Function u = next(iter(nodes))
+    bdd = u.bdd
+    var_level = {
+        var: bdd.level_of_var(var)
+        for var in bdd.vars}
+    dest['variable_to_level'] = var_level
+    dest['roots'] = [node_to_int(u) for u in nodes]
+    u = bdd.true
+    k = node_to_int(u)
+    assert k > 0, k
+    dest[str(k)] = 1
+    for u in nodes:
+        _dump_bdd(u, dest)
+
+
+# There are three versions of tis function possible:
+#
+# 1. low level for CUDD
+# 2. low level for BDD
+# 3. high level for `cudd` and `autoref`
+#
+# Working in Python results in cleaner code.
+#
+# `copy_bdd` should be implemented fdirectly rom `cudd.BDD` to
+# `bdd.BDD` because otherwise `cache` will need to contain
+# `cudd.Function` objects (`r` below), and that won't scale
+# in memory.
+cpdef _dump_bdd(Function u, dest):
+    """Recurse to dump BDD `u` to `dest`."""
+    # terminal ?
+    if u == u.bdd.true:
+        return
+    # frequent, so efficient to handle here
+    if u == u.bdd.false:
+        return
+    # non-terminal
+    k = int(rectify(u))
+    # dumped ?
+    if str(k) in dest:
+        return
+    # recurse
+    v = u.low
+    w = u.high
+    _dump_bdd(v, dest)
+    _dump_bdd(w, dest)
+    # add node
+    a = node_to_int(v)
+    b = node_to_int(w)
+    assert b > 0, b
+    dest[str(k)] = (u.level, a, b)
+
+
+cdef node_to_int(Function u):
+    """Return unique integer for each node.
+
+    Negative integer iff `u` is negated.
+    """
+    a = rectify(u)
+    i = int(a)
+    assert i > 0
+    return - i if u.negated else i
+
+
+cdef rectify(Function u):
+    """Return negation if `u` negated."""
+    return ~ u if u.negated else u
+
+
+# TODO: finish this
+cdef _copy_bdd(Function u, dest, cache):
+    """Recurse to dump BDD from `manager` to `dest`."""
+    # terminal ?
+    if u == u.bdd.true:
+        return dest.true
+    if u == u.bdd.false:
+        return dest.false
+    # non-terminal
+    z = rectify(u)
+    # memoized ?
+    k = int(z)
+    if k in cache:
+        r = cache[k]
+        assert not r.negated
+        if u.negated:
+            r = ~ r
+        return r
+    # recurse
+    v = u.low
+    w = u.high
+    p = _copy_bdd(v, dest, cache)
+    q = _copy_bdd(w, dest, cache)
+    assert p.negated == v.negated, (p, v)
+    assert not q.negated, q
+    # add node
+    # use a `dest` method for translating var names
+    # here if needed (role of `level_map` in the past)
+    g = dest.var(u.var)
+    r = dest.apply('ite', g, q, p)
+    assert not r.negated
+    # memoize
+    cache[k] = r
+    # negate ?
+    if u.negated:
+        r = ~ r
+    return r
+
+
+def load_from_json(file_name, bdd):
+    """Add BDDs from JSON `file_name` to `bdd`."""
+    raise NotImplementedError
 
 
 def dump(u, file_name, BDD bdd):
