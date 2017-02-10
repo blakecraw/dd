@@ -55,11 +55,57 @@ from dd._compat import items
 
 
 logger = logging.getLogger(__name__)
+REORDER_STARTS = 100
 # for python 3
 try:
     xrange(0)
 except NameError:
     xrange = range
+
+
+def _request_reordering(bdd):
+    """Raise `NeedsReordering` if `len(bdd)` has doubled."""
+    if bdd._last_len is None:
+        return
+    if len(bdd) >= 2 * bdd._last_len:
+        raise _NeedsReordering()
+
+
+def _try_to_reorder(func):
+    """Decorator that responds to reordering requests."""
+    def _wrapper(*args, **kwargs):
+        bdd = args[0]
+        nested = bdd._reordering_context
+        bdd._reordering_context = True
+        try:
+            return func(*args, **kwargs)
+        except _NeedsReordering:
+            print('Reordering needed...')
+        finally:
+            bdd._reordering_context = nested
+        if nested:
+            raise _NeedsReordering()
+        # disable reordering requests while swapping
+        bdd._last_len = None
+        len_before = len(bdd)
+        reorder(bdd)
+        len_after = len(bdd)
+        print(
+            'Reordering changed size '
+            'from {a} to {b}'.format(
+                a=len_before, b=len_after))
+        # enable reordering requests
+        bdd._last_len = len_before
+        r = func(*args, **kwargs)
+        bdd._reordering_context = nested
+        # try again, or fail
+        return r
+    return _wrapper
+
+
+class _NeedsReordering(Exception):
+    """Raise this to request reordering."""
+    pass
 
 
 class BDD(object):
@@ -99,6 +145,8 @@ class BDD(object):
         self.vars = dict()
         self._level_to_var = dict()
         self._init_terminal(len(self.vars))  # handle no vars
+        self._reordering_context = False  # for decorator nesting
+        self._last_len = None  # after last reordering
         for var, level in items(levels):
             self.add_var(var, level)
         self.roots = set()
@@ -133,6 +181,21 @@ class BDD(object):
             '------------------------\n'
             'var levels: {self.vars}\n'
             'roots: {self.roots}\n').format(self=self)
+
+    def configure(self, **kw):
+        d = dict(
+            reordering=(self._last_len is not None))
+        for k, v in kw.items():
+            if k == 'reordering':
+                if v:
+                    self._last_len = max(
+                        REORDER_STARTS, len(self))
+                else:
+                    self._last_len = None
+            else:
+                raise Exception(
+                    'Unknown parameter "{k}"'.format(k=k))
+        return d
 
     @property
     def ordering(self):
@@ -207,6 +270,7 @@ class BDD(object):
         self._init_terminal(len(self.vars))
         return level
 
+    @_try_to_reorder
     def var(self, var):
         """Return node for variable named `var`."""
         assert var in self.vars, (
@@ -403,6 +467,7 @@ class BDD(object):
         levels.pop(n)
         return levels
 
+    @_try_to_reorder
     def reduction(self):
         """Return copy reduced with respect to `self.vars`.
 
@@ -421,6 +486,7 @@ class BDD(object):
                 bdd.roots.add(r)
         return bdd
 
+    @_try_to_reorder
     def compose(self, f, var, g):
         """Return f(x_var=g).
 
@@ -461,6 +527,7 @@ class BDD(object):
         cache[(f, g)] = r
         return r
 
+    @_try_to_reorder
     def rename(self, u, dvars):
         """Efficient rename to non-essential neighbors.
 
@@ -469,6 +536,7 @@ class BDD(object):
         """
         return rename(u, self, dvars)
 
+    @_try_to_reorder
     def ite(self, g, u, v):
         """Return node for if-then-else of `g`, `u` and `v`.
 
@@ -528,6 +596,7 @@ class BDD(object):
             v, w = -v, -w
         return (v, w)
 
+    @_try_to_reorder
     def cofactor(self, u, values):
         """Return restriction of `u` to valuation `values`.
 
@@ -576,6 +645,7 @@ class BDD(object):
         cache[u] = r
         return r
 
+    @_try_to_reorder
     def quantify(self, u, qvars, forall=False):
         """Return existential or universal abstraction.
 
@@ -648,6 +718,7 @@ class BDD(object):
         @param v: low edge
         @param w: high edge
         """
+        _request_reordering(self)
         assert 0 <= i < len(self.vars), i
         assert abs(v) in self, v
         assert abs(w) in self, w
@@ -1062,6 +1133,7 @@ class BDD(object):
             assert self._ref[u] >= 0, self._ref[u]
         return True
 
+    @_try_to_reorder
     def add_expr(self, e):
         """Return node for expression `e`, after adding it.
 

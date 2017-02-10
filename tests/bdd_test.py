@@ -761,6 +761,26 @@ def test_sifting():
     assert u == u_, (u, u_)
 
 
+def test_dynamic_reordering():
+    b = BDD()
+    [b.add_var(var) for var in ['x', 'y', 'z', 'a', 'b', 'c', 'e']]
+    u = b.add_expr('x /\ y /\ z')
+    b.incref(u)
+    print(len(b))
+    b._last_len = 6
+    v = b.add_expr('a /\ b')
+    b.incref(v)
+    print(len(b))
+    w = b.add_expr('z \/ (~a /\ x /\ ~y)')
+    b.incref(w)
+    print(w)
+    assert w in b, (w, b._succ)
+    print(len(b))
+    print(b._last_len)
+    r = b.add_expr('(~ z \/ (c /\ b)) /\ e /\ (a /\ (~x \/ y))')
+    print(len(b))
+
+
 def test_dump_load():
     prefix = 'test_dump_load'
     fname = prefix + '.p'
