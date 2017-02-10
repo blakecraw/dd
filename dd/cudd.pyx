@@ -1523,12 +1523,14 @@ cdef class Function(object):
         Cudd_RecursiveDeref(self.manager, self.node)
 
     def __int__(self):
+        # inverse is `BDD._add_int`
         assert sizeof(stdint.uintptr_t) == sizeof(DdNode *)
         i = <stdint.uintptr_t>self.node
         assert i > 0, 'experimental check'
         # 0, 1 are true and false in logic syntax
         if 0 <= i:
             i += 2
+        assert i not in (0, 1), i
         return i
 
     def __repr__(self):
