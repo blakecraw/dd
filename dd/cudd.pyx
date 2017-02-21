@@ -1526,7 +1526,6 @@ cdef class Function(object):
         # inverse is `BDD._add_int`
         assert sizeof(stdint.uintptr_t) == sizeof(DdNode *)
         i = <stdint.uintptr_t>self.node
-        assert i > 0, 'experimental check'
         # 0, 1 are true and false in logic syntax
         if 0 <= i:
             i += 2
